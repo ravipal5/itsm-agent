@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DSA Practice</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="shell">
+    <section class="hero">
+        <div>
+            <p class="eyebrow">DSA practice</p>
+            <h1>Online assessment workspace</h1>
+            <p class="subtext">Question panel on the left, coding IDE on the right, fast language switching, and theme controls.</p>
+        </div>
+        <div class="hero-user">
+            <a class="ghost-link" href="/">Back to Dashboard</a>
+            <a class="ghost-link" href="/logout">Logout</a>
+        </div>
+    </section>
+
+    {% if flash_message %}
+    <section class="flash">{{ flash_message }}</section>
+    {% endif %}
+
+    <section class="panel dsa-shell">
+        <div class="dsa-layout assessment-layout">
+            <aside class="dsa-list">
+                <article class="workspace-card dsa-generator-card">
+                    <h3>Generate DSA Question</h3>
+                    <p class="muted-note">
+                        {% if gemini_ready %}
+                        Gemini generation is enabled for new coding questions.
+                        {% else %}
+                        Gemini is not configured, so generated questions will use the local fallback.
+                        {% endif %}
+                    </p>
+                    <div class="inline-form">
+                        <label for="dsa-topic-select">Topic</label>
+                        <select id="dsa-topic-select">
+                            <option value="Array">Array</option>
+                            <option value="String">String</option>
+                            <option value="Hash Map">Hash Map</option>
+                            <option value="Stack">Stack</option>
+                            <option value="Sliding Window">Sliding Window</option>
+                            <option value="Tree">Tree</option>
+                            <option value="Graph">Graph</option>
+                            <option value="Dynamic Programming">Dynamic Programming</option>
+                        </select>
+                    </div>
+                    <div class="inline-form">
+                        <label for="dsa-difficulty-select">Difficulty</label>
+                        <select id="dsa-difficulty-select">
+                            <option value="Easy">Easy</option>
+                            <option value="Medium" selected>Medium</option>
+                            <option value="Hard">Hard</option>
+                        </select>
+                    </div>
+                    <button type="button" id="generate-dsa-btn" class="secondary">Generate New DSA</button>
+                    <p id="dsa-generate-status" class="muted-note">Pick a topic and generate a fresh question.</p>
+                </article>
+
+                {% for question in dsa_questions %}
+                <a class="dsa-link {% if question.id == active_dsa.id %}active{% endif %}" href="/dsa/{{ question.id }}?language={{ selected_language }}">
+                    <span>{{ question.title }}</span>
+                    <small>{{ question.difficulty }}</small>
+                </a>
+                {% endfor %}
+            </aside>
+
+            <div class="dsa-workspace">
+                <article class="workspace-card">
+                    <div class="workspace-head">
+                        <div>
+                            <p class="difficulty">{{ active_dsa.difficulty }}</p>
+                            <h2>{{ active_dsa.title }}</h2>
+                        </div>
+                        <p class="topic">{{ active_dsa.topic }}</p>
+                    </div>
+                    <p>{{ active_dsa.prompt }}</p>
+                    <p class="muted-note">{{ active_dsa.description }}</p>
+                    <div class="sample-strip">
+                        {% for case in active_dsa.tests %}
+                        <div class="sample-card">
+                            <strong>Case {{ loop.index }}</strong>
+                            <p>Input: {{ case.input }}</p>
+                            <p>Expected: {{ case.expected }}</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </article>
+
+                <article class="workspace-card ide-shell">
+                    <div class="workspace-actions">
+                        <div>
+                            <h3>Assessment IDE</h3>
+                            <p class="muted-note">Supports Python, Java, C++, and C#/.NET.</p>
+                        </div>
+                        <button
+                            type="button"
+                            id="load-solution-btn"
+                            class="secondary"
+                            data-python-solution="{{ active_dsa.solution.python|e }}"
+                            data-java-solution="{{ active_dsa.solution.java|e }}"
+                            data-cpp-solution="{{ active_dsa.solution.cpp|e }}"
+                            data-csharp-solution="{{ active_dsa.solution.csharp|e }}"
+                        >
+                            Show Solution
+                        </button>
+                    </div>
+
+                    <div class="ide-toolbar">
+                        <form action="/dsa/{{ active_dsa.id }}" method="get" class="language-form inline-form">
+                            <label for="language-select">Language</label>
+                            <select id="language-select" name="language" onchange="this.form.submit()">
+                                <option value="python" {% if selected_language == "python" %}selected{% endif %}>Python</option>
+                                <option value="java" {% if selected_language == "java" %}selected{% endif %}>Java</option>
+                                <option value="cpp" {% if selected_language == "cpp" %}selected{% endif %}>C++</option>
+                                <option value="csharp" {% if selected_language == "csharp" %}selected{% endif %}>C# / .NET</option>
+                            </select>
+                        </form>
+
+                        <div class="inline-form">
+                            <label for="editor-theme-select">Theme</label>
+                            <select id="editor-theme-select">
+                                <option value="midnight">Midnight</option>
+                                <option value="graphite">Graphite</option>
+                                <option value="paper">Paper</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <form action="/dsa/{{ active_dsa.id }}/run" method="post">
+                        <input type="hidden" name="language" value="{{ selected_language }}">
+                        <div class="editor-shell">
+                            <pre id="editor-line-numbers" class="editor-line-numbers" aria-hidden="true">1</pre>
+                            <textarea id="code-editor" name="code" spellcheck="false" data-theme-target>{{ editor_code }}</textarea>
+                        </div>
+                        <button type="submit">Run Code</button>
+                    </form>
+                </article>
+
+                {% if run_result %}
+                <article class="workspace-card">
+                    <h3>Run Result</h3>
+                    {% if run_result.ok %}
+                    <ul class="feature-list result-list">
+                        {% for item in run_result.results %}
+                        <li class="{% if item.passed %}pass{% else %}fail{% endif %}">
+                            Case {{ item.case }}:
+                            {% if item.passed %}Passed{% else %}Failed{% endif %}
+                            | Expected: {{ item.expected }} | Actual: {{ item.actual }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <pre class="error-box">{{ run_result.error }}</pre>
+                    {% endif %}
+                </article>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

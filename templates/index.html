@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Interview Platform</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<main class="shell">
+    <section class="hero">
+        <div>
+            <p class="eyebrow">AI interview cockpit</p>
+            <h1>Resume-led interviews, skill-led interviews, and DSA drills</h1>
+        </div>
+        {% if user %}
+        <div class="hero-user">
+            <p>Signed in as <strong>{{ user.name }}</strong></p>
+            <a class="ghost-link" href="/logout">Logout</a>
+        </div>
+        {% endif %}
+    </section>
+
+    {% if flash_message %}
+    <section class="flash">{{ flash_message }}</section>
+    {% endif %}
+
+    {% if not user %}
+    <section class="auth-layout">
+        <article class="panel auth-copy">
+            <h2>Interview workflow</h2>
+            <p>Register or sign in to unlock the full candidate experience:</p>
+            <ul class="feature-list">
+                <li>Upload a resume and open a dedicated AI interview page based on detected skills and experience.</li>
+                <li>Create a skill-based interview by selecting skills and experience level.</li>
+                <li>Open a separate DSA coding page for each problem and code in Python, Java, C++, or C#/.NET.</li>
+                <li>Use browser voice controls to read questions and capture spoken answers.</li>
+            </ul>
+        </article>
+
+        <article class="panel auth-panel">
+            <div class="tabs">
+                <a class="tab {% if auth_mode == 'login' %}active{% endif %}" href="/?auth=login">Login</a>
+                <a class="tab {% if auth_mode == 'register' %}active{% endif %}" href="/?auth=register">Register</a>
+            </div>
+
+            {% if auth_mode == "register" %}
+            <form action="/register" method="post">
+                <label>Name</label>
+                <input type="text" name="name" placeholder="Rahul Patel" required>
+                <label>Email</label>
+                <input type="email" name="email" placeholder="rahul@example.com" required>
+                <label>Password</label>
+                <input type="password" name="password" placeholder="Create a password" required minlength="6">
+                <button type="submit">Create account</button>
+            </form>
+            {% else %}
+            <form action="/login" method="post">
+                <label>Email</label>
+                <input type="email" name="email" placeholder="rahul@example.com" required>
+                <label>Password</label>
+                <input type="password" name="password" placeholder="Enter password" required>
+                <button type="submit">Login</button>
+            </form>
+
+            <div class="oauth-block">
+                {% if google_ready %}
+                <a class="google-btn" href="/auth/google">Continue with Google</a>
+                {% else %}
+                <button type="button" class="google-btn disabled-btn" disabled>Continue with Google</button>
+                {% endif %}
+                <p class="muted-note">
+                    {% if google_ready %}
+                    Google OAuth is configured. Callback URL: {{ google_callback_url }}
+                    {% else %}
+                    Google sign-in is disabled because this workspace has no Google OAuth credentials loaded. Create `.env` from `.env.example` and use callback URL `{{ google_callback_url }}`.
+                    {% endif %}
+                </p>
+            </div>
+            {% endif %}
+        </article>
+    </section>
+    {% else %}
+    <section class="grid top-grid">
+        <article class="panel">
+            <div class="section-head">
+                <div>
+                    <p class="eyebrow compact">Flow A</p>
+                    <h2>Resume to Interview</h2>
+                </div>
+                <span class="chip">Upload -> New Interview Page</span>
+            </div>
+            <form action="/resume" method="post" enctype="multipart/form-data">
+                <label>Resume File</label>
+                <input type="file" name="resume" accept=".txt,.md,.docx,.pdf,.json" required>
+                <button type="submit">Start Interview</button>
+            </form>
+        </article>
+
+        <article class="panel">
+            <div class="section-head">
+                <div>
+                    <p class="eyebrow compact">Flow B</p>
+                    <h2>Skill-based Interview</h2>
+                </div>
+                <span class="chip">Role + Skills + Level</span>
+            </div>
+            <form action="/interview" method="post">
+                <label>Role</label>
+                <input type="text" name="role" placeholder="Backend Engineer" required>
+                <label>Skills</label>
+                <input type="text" name="skills" placeholder="python, sql, api design" required>
+                <label>Experience Level</label>
+                <select name="experience_level">
+                    <option>Junior</option>
+                    <option>Mid-level</option>
+                    <option>Senior</option>
+                </select>
+                <button type="submit">Generate Interview</button>
+            </form>
+        </article>
+    </section>
+
+    <section class="panel dsa-preview">
+        <div class="section-head">
+            <div>
+                <p class="eyebrow compact">Flow C</p>
+                <h2>DSA Practice</h2>
+            </div>
+            <a class="google-btn small-btn" href="/dsa">Open DSA Panel</a>
+        </div>
+        <div class="dsa-grid">
+            {% for question in dsa_questions %}
+            <a class="dsa-card-link" href="/dsa/{{ question.id }}">
+                <article class="card">
+                    <p class="difficulty">{{ question.difficulty }}</p>
+                    <h3>{{ question.title }}</h3>
+                    <p>{{ question.prompt }}</p>
+                    <p class="topic">{{ question.topic }}</p>
+                </article>
+            </a>
+            {% endfor %}
+        </div>
+    </section>
+    {% endif %}
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
