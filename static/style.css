@@ -488,6 +488,38 @@ button.secondary {
     margin-bottom: 14px;
 }
 
+.dsa-action-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+}
+
+.dsa-action-row button {
+    min-height: 44px;
+    font-weight: 700;
+}
+
+.ide-shell .dsa-action-row .run-btn {
+    background: linear-gradient(135deg, var(--accent), #139b8f);
+    color: #ffffff;
+    border: none;
+}
+
+.ide-shell .dsa-action-row .run-btn:hover {
+    filter: brightness(1.05);
+}
+
+.ide-shell .dsa-action-row .submit-btn {
+    background: linear-gradient(135deg, #f06b3f, #de4f28);
+    color: #ffffff;
+    border: none;
+}
+
+.ide-shell .dsa-action-row .submit-btn:hover {
+    filter: brightness(1.06);
+}
+
 .editor-line-numbers {
     margin: 0;
     padding: 16px 12px;
@@ -536,11 +568,45 @@ button.secondary {
     color: #ffd6d6;
 }
 
+.submission-code {
+    margin-top: 8px;
+}
+
+.submission-code summary {
+    cursor: pointer;
+    font-weight: 700;
+}
+
 .empty-state {
     min-height: 180px;
     display: grid;
     place-items: center;
     color: var(--muted);
+}
+
+.history-table-wrap {
+    overflow-x: auto;
+}
+
+.history-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 760px;
+}
+
+.history-table th,
+.history-table td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(19, 32, 51, 0.1);
+    vertical-align: top;
+}
+
+.history-table th {
+    color: var(--muted);
+    font-size: 0.88rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
 }
 
 @media (max-width: 920px) {

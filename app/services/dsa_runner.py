@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
@@ -8,6 +10,10 @@ from pathlib import Path
 
 
 def run_dsa_code(question: dict, user_code: str, language: str) -> dict:
+    violation = validate_submission_safety(user_code, language)
+    if violation:
+        return {"ok": False, "error": violation, "results": []}
+
     if language == "python":
         return run_python(question, user_code)
     if language == "java":
@@ -19,43 +25,61 @@ def run_dsa_code(question: dict, user_code: str, language: str) -> dict:
     return {"ok": False, "error": f"Unsupported language: {language}", "results": []}
 
 
+def validate_submission_safety(user_code: str, language: str) -> str | None:
+    rules = {
+        "python": [r"\bimport\s+os\b", r"\bimport\s+subprocess\b", r"\bimport\s+socket\b", r"\bopen\s*\(", r"\beval\s*\(", r"\bexec\s*\("],
+        "java": [r"\bjava\.io\b", r"\bProcessBuilder\b", r"\bRuntime\.getRuntime\b", r"\bjava\.net\b"],
+        "cpp": [r"\bfstream\b", r"\bsystem\s*\(", r"\bpopen\s*\(", r"\b<filesystem>\b", r"\b<sys/socket.h>\b"],
+        "csharp": [r"\bSystem\.IO\b", r"\bSystem\.Net\b", r"\bSystem\.Diagnostics\.Process\b", r"\bFile\."],
+    }
+    for pattern in rules.get(language, []):
+        if re.search(pattern, user_code):
+            return f"Submission blocked by sandbox policy: disallowed construct matched `{pattern}`."
+    if len(user_code) > 12000:
+        return "Submission blocked by sandbox policy: code exceeds size limit."
+    return None
+
+
 def run_python(question: dict, user_code: str) -> dict:
     test_payload = json.dumps(question["tests"])
-    runner_script = textwrap.dedent(
-        f"""
-        import json
-
-        {user_code}
-
-        tests = json.loads({test_payload!r})
-        function_name = {question["function_name"]!r}
-        target = globals().get(function_name)
-        if target is None:
-            raise NameError(f"Function '{{function_name}}' is not defined.")
-
-        results = []
-        for index, case in enumerate(tests, start=1):
-            actual = target(*case["input"])
-            passed = actual == case["expected"]
-            results.append({{
-                "case": index,
-                "passed": passed,
-                "expected": case["expected"],
-                "actual": actual,
-            }})
-
-        print(json.dumps(results))
-        """
+    runner_script = "\n".join(
+        [
+            "import json",
+            "",
+            user_code.rstrip(),
+            "",
+            f"tests = json.loads({test_payload!r})",
+            f"function_name = {question['function_name']!r}",
+            "target = globals().get(function_name)",
+            "if target is None:",
+            "    raise NameError(f\"Function '{function_name}' is not defined.\")",
+            "",
+            "results = []",
+            "for index, case in enumerate(tests, start=1):",
+            "    actual = target(*case['input'])",
+            "    passed = actual == case['expected']",
+            "    results.append({",
+            "        'case': index,",
+            "        'passed': passed,",
+            "        'expected': case['expected'],",
+            "        'actual': actual,",
+            "    })",
+            "",
+            "print(json.dumps(results))",
+            "",
+        ]
     )
 
     with tempfile.TemporaryDirectory() as temp_dir:
         script_path = Path(temp_dir) / "runner.py"
         script_path.write_text(runner_script, encoding="utf-8")
         completed = subprocess.run(
-            [sys.executable, str(script_path)],
+            [sys.executable, "-I", "-S", str(script_path)],
             capture_output=True,
             text=True,
             timeout=5,
+            cwd=temp_dir,
+            env={"PYTHONIOENCODING": "utf-8", "PYTHONNOUSERSITE": "1"},
         )
     return parse_completed(completed)
 
@@ -132,6 +156,7 @@ def run_java(question: dict, user_code: str) -> dict:
             text=True,
             timeout=5,
             cwd=temp_dir,
+            env=minimal_execution_env(),
         )
     return parse_line_results(completed)
 
@@ -211,6 +236,7 @@ def run_cpp(question: dict, user_code: str) -> dict:
             text=True,
             timeout=5,
             cwd=temp_dir,
+            env=minimal_execution_env(),
         )
     return parse_line_results(completed)
 
@@ -295,6 +321,7 @@ def run_csharp(question: dict, user_code: str) -> dict:
             text=True,
             timeout=20,
             cwd=temp_dir,
+            env=minimal_execution_env(),
         )
     return parse_line_results(completed)
 
@@ -302,7 +329,11 @@ def run_csharp(question: dict, user_code: str) -> dict:
 def parse_completed(completed: subprocess.CompletedProcess) -> dict:
     if completed.returncode != 0:
         return {"ok": False, "error": (completed.stderr or completed.stdout or "Unknown execution error").strip(), "results": []}
-    return {"ok": True, "error": "", "results": json.loads(completed.stdout)}
+    try:
+        parsed = json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return {"ok": False, "error": (completed.stdout or "Runner returned invalid JSON").strip(), "results": []}
+    return {"ok": True, "error": "", "results": parsed}
 
 
 def parse_line_results(completed: subprocess.CompletedProcess) -> dict:
@@ -374,3 +405,14 @@ def formatter_for_expected(value):
     if isinstance(value, list) and value and isinstance(value[0], list):
         return "matrixToString"
     return "vectorToString"
+
+
+def minimal_execution_env() -> dict:
+    base = {
+        "PATH": os.getenv("PATH", ""),
+        "SYSTEMROOT": os.getenv("SYSTEMROOT", ""),
+        "WINDIR": os.getenv("WINDIR", ""),
+        "TEMP": os.getenv("TEMP", ""),
+        "TMP": os.getenv("TMP", ""),
+    }
+    return {key: value for key, value in base.items() if value}

@@ -20,6 +20,8 @@ from app.services.auth import (
     upsert_google_user,
 )
 from app.services.dsa import (
+    add_dsa_submission_for_user,
+    build_submission_entry,
     DSA_QUESTIONS,
     build_generated_dsa_question,
     gemini_dsa_configured,
@@ -39,6 +41,12 @@ from app.services.interview import (
     normalize_experience_level,
 )
 from app.services.resume import extract_resume_text, infer_resume_profile
+from app.services.reports import (
+    list_dsa_submissions,
+    list_interview_reports,
+    save_dsa_submission,
+    save_interview_report,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -107,17 +115,20 @@ def render_dashboard(
     interview_source: str | None = None,
     auth_mode: str = "login",
 ) -> HTMLResponse:
+    user = get_current_user(request)
+    dsa_submissions = list_dsa_submissions(user["id"], limit=30) if user else []
     return templates.TemplateResponse(
         request,
         "index.html",
         {
-            "user": get_current_user(request),
+            "user": user,
             "auth_mode": auth_mode,
             "flash_message": pop_flash(request),
             "google_ready": google_oauth_configured(),
             "google_callback_url": str(request.url_for("google_callback")),
             "gemini_ready": gemini_configured(),
             "dsa_questions": get_all_dsa_questions(get_session_dsa_questions(request)),
+            "dsa_submissions": dsa_submissions,
             "interview_questions": interview_questions,
             "interview_source": interview_source,
         },
@@ -158,6 +169,7 @@ def render_dsa_page(
     code: str | None = None,
     language: str = "python",
     run_result: dict | None = None,
+    submission_report: dict | None = None,
 ) -> HTMLResponse:
     session_questions = get_session_dsa_questions(request)
     question = get_dsa_question(question_id, session_questions)
@@ -176,9 +188,47 @@ def render_dsa_page(
             "selected_language": language,
             "editor_code": code or question["starter_code"][language],
             "run_result": run_result,
+            "submission_report": submission_report,
+            "submission_history": list_dsa_submissions(request.session.get("user_id") or 0, question_id=question["id"], limit=30),
             "gemini_ready": gemini_dsa_configured(),
         },
     )
+
+
+def build_submission_report(code: str, language: str, run_result: dict) -> dict:
+    code_lines = [line for line in code.splitlines() if line.strip()]
+    passed_count = sum(1 for item in run_result.get("results", []) if item.get("passed"))
+    total_count = len(run_result.get("results", []))
+    score = int((passed_count / total_count) * 100) if total_count else 0
+
+    hints: list[str] = []
+    if not code_lines:
+        hints.append("Code is empty. Start from starter function and implement logic.")
+    if language == "python" and "def " not in code:
+        hints.append("Define the required function with `def`.")
+    if language == "java" and "class Solution" not in code:
+        hints.append("Use `class Solution` and keep the required method signature.")
+    if language == "cpp" and "return" not in code:
+        hints.append("Make sure the function returns the required value.")
+    if language == "csharp" and "class Solution" not in code:
+        hints.append("Use `class Solution` and keep the required method signature.")
+    if run_result.get("error"):
+        hints.append("Fix compile/runtime errors first, then submit again.")
+    if run_result.get("ok") and passed_count < total_count:
+        hints.append("Some tests failed. Re-check edge cases and constraints.")
+    if run_result.get("ok") and passed_count == total_count:
+        hints.append("Great job. All tests passed for this submission.")
+
+    return {
+        "language": language.upper(),
+        "line_count": len(code_lines),
+        "passed_count": passed_count,
+        "total_count": total_count,
+        "score": score,
+        "status": "Passed" if run_result.get("ok") else "Failed",
+        "error": str(run_result.get("error", "")).strip(),
+        "hints": hints[:4],
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -380,7 +430,10 @@ async def interview_feedback(
 
     question_answers = payload.get("question_answers", [])
     profile = payload.get("profile", {})
-    return JSONResponse(generate_interview_feedback(question_answers, profile))
+    feedback = generate_interview_feedback(question_answers, profile)
+    report_id = save_interview_report(user["id"], profile, question_answers, feedback)
+    feedback["report_id"] = report_id
+    return JSONResponse(feedback)
 
 
 @app.post("/interview/questions")
@@ -414,6 +467,14 @@ async def interview_questions_api(
     )
 
 
+@app.get("/interview/history")
+async def interview_history(request: Request) -> JSONResponse:
+    user = require_user(request)
+    if isinstance(user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Please log in first.")
+    return JSONResponse({"reports": list_interview_reports(user["id"], limit=30)})
+
+
 @app.get("/dsa", response_class=HTMLResponse)
 async def dsa_landing(request: Request):
     user = require_user(request)
@@ -442,6 +503,50 @@ async def dsa_run(request: Request, question_id: str, code: str = Form(...), lan
 
     run_result = run_dsa_code(question, code, language)
     return render_dsa_page(request, question_id, code=code, language=language, run_result=run_result)
+
+
+@app.post("/dsa/{question_id}/submit")
+async def dsa_submit(request: Request, question_id: str, code: str = Form(...), language: str = Form(...)) -> HTMLResponse:
+    user = require_user(request)
+    if isinstance(user, RedirectResponse):
+        return user
+
+    question = get_dsa_question(question_id, get_session_dsa_questions(request))
+    if not question:
+        raise HTTPException(status_code=404, detail="DSA question not found")
+
+    run_result = run_dsa_code(question, code, language)
+    submission_report = build_submission_report(code, language, run_result)
+    user_id = request.session.get("user_id")
+    if user_id:
+        submission_entry = build_submission_entry(question, language, run_result)
+        submission_entry["code"] = code
+        submission_entry["run_result"] = run_result
+        add_dsa_submission_for_user(user_id, submission_entry)
+        save_dsa_submission(user_id, submission_entry)
+
+    if run_result.get("ok"):
+        passed_count = sum(1 for item in run_result.get("results", []) if item.get("passed"))
+        total_count = len(run_result.get("results", []))
+        request.session["flash"] = f"Submission saved: {question.get('title')} ({language.upper()}) {passed_count}/{total_count} passed."
+    else:
+        request.session["flash"] = f"Submission saved with errors: {question.get('title')} ({language.upper()})."
+    return render_dsa_page(
+        request,
+        question_id,
+        code=code,
+        language=language,
+        run_result=run_result,
+        submission_report=submission_report,
+    )
+
+
+@app.get("/api/dsa/submissions")
+async def dsa_submission_history(request: Request) -> JSONResponse:
+    user = require_user(request)
+    if isinstance(user, RedirectResponse):
+        raise HTTPException(status_code=401, detail="Please log in first.")
+    return JSONResponse({"submissions": list_dsa_submissions(user["id"], limit=50)})
 
 
 @app.post("/dsa/generate")

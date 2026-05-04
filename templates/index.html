@@ -142,6 +142,83 @@
             {% endfor %}
         </div>
     </section>
+
+    <section class="panel history-panel" id="history-panel">
+        <div class="section-head">
+            <div>
+                <p class="eyebrow compact">Flow D</p>
+                <h2>Interview History</h2>
+            </div>
+            <span class="chip" id="history-count-chip">Recent Reports</span>
+        </div>
+        <p class="muted-note" id="history-status">Loading interview history...</p>
+        <div class="history-table-wrap">
+            <table class="history-table">
+                <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Role</th>
+                    <th>Level</th>
+                    <th>Source</th>
+                    <th>Completion</th>
+                    <th>Overall</th>
+                </tr>
+                </thead>
+                <tbody id="history-table-body">
+                <tr>
+                    <td colspan="6" class="muted-note">No reports yet.</td>
+                </tr>
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="panel history-panel" id="dsa-history-panel">
+        <div class="section-head">
+            <div>
+                <p class="eyebrow compact">Flow D</p>
+                <h2>DSA Submission History</h2>
+            </div>
+            <span class="chip" id="dsa-history-count-chip">{{ dsa_submissions|length }} Recent Submissions</span>
+        </div>
+        <p class="muted-note" id="dsa-history-status">
+            {% if dsa_submissions %}
+            Saved submissions from your coding attempts.
+            {% else %}
+            No DSA submissions yet. Open DSA panel and click Submit.
+            {% endif %}
+        </p>
+        <div class="history-table-wrap">
+            <table class="history-table">
+                <thead>
+                <tr>
+                    <th>When</th>
+                    <th>Question</th>
+                    <th>Language</th>
+                    <th>Status</th>
+                    <th>Passed</th>
+                </tr>
+                </thead>
+                <tbody id="dsa-history-table-body">
+                {% if dsa_submissions %}
+                {% for submission in dsa_submissions %}
+                <tr>
+                    <td>{{ submission.submitted_at }}</td>
+                    <td>{{ submission.question_title or submission.question_id }}</td>
+                    <td>{{ submission.language|upper }}</td>
+                    <td>{% if submission.ok %}Passed{% else %}Failed{% endif %}</td>
+                    <td>{% if submission.ok %}{{ submission.passed_count }}/{{ submission.total_count }}{% else %}-{% endif %}</td>
+                </tr>
+                {% endfor %}
+                {% else %}
+                <tr>
+                    <td colspan="5" class="muted-note">No submissions yet.</td>
+                </tr>
+                {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </section>
     {% endif %}
 </main>
 

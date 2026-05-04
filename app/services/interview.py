@@ -4,7 +4,14 @@ import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from app.services.llm_config import gemini_configured, get_gemini_api_key, get_gemini_model
+from app.services.llm_config import (
+    gemini_configured as gemini_key_configured,
+    get_gemini_api_key,
+    get_gemini_model,
+    get_groq_api_key,
+    get_groq_model,
+    groq_configured,
+)
 
 
 LEVEL_CONFIG = {
@@ -60,6 +67,10 @@ RESUME_PATTERNS = [
     "Your resume suggests work around {skill}. What was the real business problem behind that work?",
     "When you used {skill}, what part did you own yourself instead of just supporting others?",
 ]
+
+
+def gemini_configured() -> bool:
+    return groq_configured() or gemini_key_configured()
 
 
 def normalize_experience_level(experience_level: str) -> str:
@@ -278,25 +289,59 @@ def _finalize_ai_questions(profile: dict, questions: list[dict]) -> list[dict]:
 
 
 def generate_ai_interview_questions(profile: dict) -> tuple[list[dict], str]:
-    if not gemini_configured():
-        return [], "GEMINI_API_KEY is missing."
+    if not groq_configured() and not gemini_configured():
+        return [], "No LLM API key configured. Set GROQ_API_KEY or GEMINI_API_KEY."
 
     variation_token = random.randint(100000, 999999)
-    payload = {
+    prompt_text = (
+        "Generate a realistic human-sounding mock interview. "
+        "Return only valid JSON. "
+        "Ask one-question-at-a-time style questions, not explanations. "
+        "Vary the questions on every request while staying relevant to the candidate profile.\n\n"
+        + build_generation_prompt(profile, variation_token)
+        + "\n\nReturn JSON with this exact shape: "
+        '{"questions":[{"type":"behavioral","question":"..." }]}'
+    )
+
+    if groq_configured():
+        payload = {
+            "model": get_groq_model(),
+            "messages": [{"role": "user", "content": prompt_text}],
+            "temperature": 1.0,
+            "max_tokens": 1500,
+        }
+        request = Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {get_groq_api_key()}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "itsm-agent/1.0",
+            },
+            method="POST",
+        )
+
+        try:
+            with urlopen(request, timeout=25) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            output_text = extract_groq_text(data).strip()
+        except HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8")
+            except Exception:
+                detail = str(exc)
+            return [], f"Groq request failed: {detail}"
+        except (TimeoutError, URLError, ValueError, OSError) as exc:
+            return [], f"Groq request failed: {exc}"
+    else:
+        payload = {
         "contents": [
             {
                 "role": "user",
                 "parts": [
                     {
-                        "text": (
-                            "Generate a realistic human-sounding mock interview. "
-                            "Return only valid JSON. "
-                            "Ask one-question-at-a-time style questions, not explanations. "
-                            "Vary the questions on every request while staying relevant to the candidate profile.\n\n"
-                            + build_generation_prompt(profile, variation_token)
-                            + "\n\nReturn JSON with this exact shape: "
-                            '{"questions":[{"type":"behavioral","question":"..." }]}'
-                        )
+                        "text": prompt_text
                     }
                 ],
             }
@@ -307,31 +352,31 @@ def generate_ai_interview_questions(profile: dict) -> tuple[list[dict], str]:
         },
     }
 
-    request = Request(
-        f"https://generativelanguage.googleapis.com/v1beta/models/{get_gemini_model()}:generateContent",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "x-goog-api-key": get_gemini_api_key(),
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+        request = Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{get_gemini_model()}:generateContent",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "x-goog-api-key": get_gemini_api_key(),
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
 
-    try:
-        with urlopen(request, timeout=25) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exc:
         try:
-            detail = exc.read().decode("utf-8")
-        except Exception:
-            detail = str(exc)
-        return [], f"Gemini request failed: {detail}"
-    except (TimeoutError, URLError, ValueError, OSError) as exc:
-        return [], f"Gemini request failed: {exc}"
+            with urlopen(request, timeout=25) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            output_text = extract_gemini_text(data).strip()
+        except HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8")
+            except Exception:
+                detail = str(exc)
+            return [], f"Gemini request failed: {detail}"
+        except (TimeoutError, URLError, ValueError, OSError) as exc:
+            return [], f"Gemini request failed: {exc}"
 
-    output_text = extract_gemini_text(data).strip()
     if not output_text:
-        return [], "Gemini returned no text output."
+        return [], "LLM returned no text output."
 
     parsed = extract_json_payload(output_text)
     if not parsed:
@@ -357,6 +402,14 @@ def extract_gemini_text(payload: dict) -> str:
             if text:
                 texts.append(text)
     return "".join(texts)
+
+
+def extract_groq_text(payload: dict) -> str:
+    choices = payload.get("choices", [])
+    if not choices:
+        return ""
+    message = choices[0].get("message", {})
+    return str(message.get("content", "") or "")
 
 
 def extract_json_payload(text: str) -> dict | None:
@@ -431,6 +484,10 @@ def build_generation_prompt(profile: dict, variation_token: int) -> str:
 
 
 def generate_interview_feedback(question_answers: list[dict], profile: dict) -> dict:
+    llm_feedback, llm_error = generate_ai_interview_feedback(question_answers, profile)
+    if llm_feedback:
+        return llm_feedback
+
     answered = [item for item in question_answers if item.get("answer", "").strip()]
     total_questions = len(question_answers)
     answered_count = len(answered)
@@ -486,4 +543,78 @@ def generate_interview_feedback(question_answers: list[dict], profile: dict) -> 
         "strengths": strengths[:4],
         "improvements": improvements[:4],
         "recommendation": recommendation,
+        "generation_error": llm_error,
     }
+
+
+def generate_ai_interview_feedback(question_answers: list[dict], profile: dict) -> tuple[dict | None, str]:
+    answered = [item for item in question_answers if str(item.get("answer", "")).strip()]
+    if not answered:
+        return None, "No answers provided."
+
+    prompt = (
+        "You are an interview evaluator. Return JSON only with keys: "
+        "completion(int), overall(string), strengths(array of max 4 strings), "
+        "improvements(array of max 4 strings), recommendation(string), follow_up_questions(array of max 3 strings). "
+        "Use concise human recruiter language.\n\n"
+        f"Profile: {json.dumps(profile)}\n"
+        f"QuestionAnswers: {json.dumps(answered)}"
+    )
+
+    if groq_configured():
+        payload = {
+            "model": get_groq_model(),
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+            "max_tokens": 1000,
+        }
+        request = Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {get_groq_api_key()}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "itsm-agent/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            text = extract_groq_text(data)
+        except Exception as exc:
+            return None, f"Groq feedback failed: {exc}"
+    elif gemini_key_configured():
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"responseMimeType": "application/json", "temperature": 0.3},
+        }
+        request = Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{get_gemini_model()}:generateContent",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"x-goog-api-key": get_gemini_api_key(), "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                data = json.loads(response.read().decode("utf-8"))
+            text = extract_gemini_text(data)
+        except Exception as exc:
+            return None, f"Gemini feedback failed: {exc}"
+    else:
+        return None, "No LLM configured."
+
+    parsed = extract_json_payload(text)
+    if not parsed or not isinstance(parsed, dict):
+        return None, "Feedback LLM returned invalid JSON."
+
+    completion = int(parsed.get("completion", 0))
+    return {
+        "completion": max(0, min(100, completion)),
+        "overall": str(parsed.get("overall", "")).strip(),
+        "strengths": [str(item).strip() for item in parsed.get("strengths", []) if str(item).strip()][:4],
+        "improvements": [str(item).strip() for item in parsed.get("improvements", []) if str(item).strip()][:4],
+        "recommendation": str(parsed.get("recommendation", "")).strip(),
+        "follow_up_questions": [str(item).strip() for item in parsed.get("follow_up_questions", []) if str(item).strip()][:3],
+    }, ""

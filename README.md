@@ -52,7 +52,7 @@ pip install -r requirements.txt
 3. Start the server:
 
 ```powershell
-uvicorn app.main:app --reload
+python -m uvicorn app.main:app --reload
 ```
 
 4. Open:
@@ -69,17 +69,30 @@ $env:GOOGLE_CLIENT_SECRET="your-client-secret"
 $env:SESSION_SECRET="replace-this-in-real-use"
 ```
 
-## Gemini setup for interview + DSA generation
+## Groq/Gemini setup for interview + DSA generation
 
 Set these environment variables before starting the server:
 
 ```powershell
+$env:GROQ_API_KEY="your-groq-api-key"
+$env:GROQ_MODEL="llama-3.3-70b-versatile"
+$env:GROQ_DSA_MODEL="llama-3.1-8b-instant"
 $env:GEMINI_API_KEY="your-gemini-api-key"
 $env:GEMINI_MODEL="gemini-2.5-flash"
 $env:GEMINI_DSA_MODEL="gemini-2.0-flash-lite"
 ```
 
-`GEMINI_API_KEY` is preferred. For compatibility, the app also checks `GOOGLE_API_KEY` and `OPENAI_API_KEY` if `GEMINI_API_KEY` is not set.
+`GROQ_API_KEY` is preferred and used first. Gemini remains available as a fallback if Groq is not configured.
+
+## Troubleshooting generation errors
+
+- If you see `HTTP 403 error code: 1010` on Groq generation:
+  - verify the model is allowed in your Groq project limits
+  - set `GROQ_DSA_MODEL=llama-3.1-8b-instant` as fallback
+  - rotate API key if it was exposed
+- If you see Gemini `429`:
+  - it is a quota/rate-limit issue
+  - wait for reset window or use another project/key
 
 ## Next practical upgrades
 

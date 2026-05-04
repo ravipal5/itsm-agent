@@ -6,6 +6,14 @@ const generateDsaBtn = document.getElementById("generate-dsa-btn");
 const dsaTopicSelect = document.getElementById("dsa-topic-select");
 const dsaDifficultySelect = document.getElementById("dsa-difficulty-select");
 const dsaGenerateStatus = document.getElementById("dsa-generate-status");
+const historyPanel = document.getElementById("history-panel");
+const historyStatus = document.getElementById("history-status");
+const historyTableBody = document.getElementById("history-table-body");
+const historyCountChip = document.getElementById("history-count-chip");
+const dsaHistoryPanel = document.getElementById("dsa-history-panel");
+const dsaHistoryStatus = document.getElementById("dsa-history-status");
+const dsaHistoryTableBody = document.getElementById("dsa-history-table-body");
+const dsaHistoryCountChip = document.getElementById("dsa-history-count-chip");
 
 function applyEditorTheme(themeName) {
     if (!codeEditor) {
@@ -61,6 +69,133 @@ if (loadSolutionBtn) {
 }
 
 attachLineNumberGutter();
+
+if (historyPanel && historyTableBody) {
+    (async () => {
+        try {
+            const response = await fetch("/interview/history", { headers: { Accept: "application/json" } });
+            if (!response.ok) {
+                if (historyStatus) {
+                    historyStatus.textContent = "Could not load interview history.";
+                }
+                return;
+            }
+
+            const payload = await response.json();
+            const reports = payload.reports || [];
+            if (historyCountChip) {
+                historyCountChip.textContent = `${reports.length} Recent Reports`;
+            }
+            if (historyStatus) {
+                historyStatus.textContent = reports.length
+                    ? "Saved interview reports from your previous sessions."
+                    : "No saved reports yet. Finish an interview to create your first report.";
+            }
+
+            historyTableBody.innerHTML = "";
+            if (!reports.length) {
+                const row = document.createElement("tr");
+                const cell = document.createElement("td");
+                cell.colSpan = 6;
+                cell.className = "muted-note";
+                cell.textContent = "No reports yet.";
+                row.appendChild(cell);
+                historyTableBody.appendChild(row);
+                return;
+            }
+
+            reports.forEach((report) => {
+                const row = document.createElement("tr");
+                const createdAt = report.created_at ? new Date(report.created_at.replace(" ", "T")) : null;
+                const createdText = createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt.toLocaleString() : (report.created_at || "-");
+                const cells = [
+                    createdText,
+                    report.role || "-",
+                    report.level || "-",
+                    report.source || "-",
+                    `${report.completion ?? 0}%`,
+                    report.overall || "-",
+                ];
+                cells.forEach((value) => {
+                    const td = document.createElement("td");
+                    td.textContent = value;
+                    row.appendChild(td);
+                });
+                historyTableBody.appendChild(row);
+            });
+        } catch {
+            if (historyStatus) {
+                historyStatus.textContent = "Could not load interview history.";
+            }
+        }
+    })();
+}
+
+if (dsaHistoryPanel && dsaHistoryTableBody) {
+    (async () => {
+        try {
+            const response = await fetch("/api/dsa/submissions", { headers: { Accept: "application/json" } });
+            if (!response.ok) {
+                if (dsaHistoryStatus) {
+                    dsaHistoryStatus.textContent = "Could not load DSA submission history.";
+                }
+                return;
+            }
+
+            const payload = await response.json();
+            const submissions = payload.submissions || [];
+            if (dsaHistoryCountChip) {
+                dsaHistoryCountChip.textContent = `${submissions.length} Recent Submissions`;
+            }
+            if (dsaHistoryStatus) {
+                dsaHistoryStatus.textContent = submissions.length
+                    ? "Saved submissions from your coding attempts."
+                    : "No DSA submissions yet. Open DSA panel and click Submit.";
+            }
+
+            dsaHistoryTableBody.innerHTML = "";
+            if (!submissions.length) {
+                const row = document.createElement("tr");
+                const cell = document.createElement("td");
+                cell.colSpan = 5;
+                cell.className = "muted-note";
+                cell.textContent = "No submissions yet.";
+                row.appendChild(cell);
+                dsaHistoryTableBody.appendChild(row);
+                return;
+            }
+
+            submissions.forEach((submission) => {
+                const row = document.createElement("tr");
+                const createdAt = submission.submitted_at ? new Date(submission.submitted_at) : null;
+                const createdText = createdAt && !Number.isNaN(createdAt.getTime())
+                    ? createdAt.toLocaleString()
+                    : (submission.submitted_at || "-");
+                const statusText = submission.ok ? "Passed" : "Failed";
+                const passedText = submission.ok
+                    ? `${submission.passed_count ?? 0}/${submission.total_count ?? 0}`
+                    : "-";
+                const cells = [
+                    createdText,
+                    submission.question_title || submission.question_id || "-",
+                    (submission.language || "-").toUpperCase(),
+                    statusText,
+                    passedText,
+                ];
+                cells.forEach((value) => {
+                    const td = document.createElement("td");
+                    td.textContent = value;
+                    row.appendChild(td);
+                });
+                dsaHistoryTableBody.appendChild(row);
+            });
+        } catch {
+            if (dsaHistoryStatus) {
+                dsaHistoryStatus.textContent = "Could not load DSA submission history.";
+            }
+        }
+    })();
+}
 
 if (generateDsaBtn) {
     generateDsaBtn.addEventListener("click", async () => {

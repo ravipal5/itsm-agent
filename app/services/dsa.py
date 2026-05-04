@@ -5,10 +5,17 @@ import random
 import re
 import textwrap
 import uuid
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from app.services.llm_config import gemini_configured, get_gemini_api_key
+from app.services.llm_config import (
+    gemini_configured,
+    get_gemini_api_key,
+    get_groq_api_key,
+    get_groq_model,
+    groq_configured,
+)
 
 
 def multi_language_starter(
@@ -186,6 +193,7 @@ DSA_QUESTIONS = [
 # Cookie-backed sessions cannot safely hold full generated question payloads.
 # Keep per-user generated questions server-side to avoid cookie size overflows.
 _GENERATED_DSA_BY_USER: dict[int, list[dict]] = {}
+_DSA_SUBMISSIONS_BY_USER: dict[int, list[dict]] = {}
 
 
 def get_dsa_question(question_id: str, custom_questions: list[dict] | None = None) -> dict | None:
@@ -207,8 +215,37 @@ def save_generated_dsa_questions_for_user(user_id: int, questions: list[dict]) -
     _GENERATED_DSA_BY_USER[user_id] = questions
 
 
+def add_dsa_submission_for_user(user_id: int, submission: dict) -> None:
+    items = _DSA_SUBMISSIONS_BY_USER.get(user_id, [])
+    items.insert(0, submission)
+    _DSA_SUBMISSIONS_BY_USER[user_id] = items[:80]
+
+
+def get_dsa_submissions_for_user(user_id: int, question_id: str | None = None) -> list[dict]:
+    items = _DSA_SUBMISSIONS_BY_USER.get(user_id, [])
+    if not question_id:
+        return items
+    return [item for item in items if item.get("question_id") == question_id]
+
+
+def build_submission_entry(question: dict, language: str, run_result: dict) -> dict:
+    results = run_result.get("results", []) if isinstance(run_result, dict) else []
+    passed_count = sum(1 for item in results if item.get("passed"))
+    total_count = len(results)
+    return {
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "question_id": question.get("id"),
+        "question_title": question.get("title"),
+        "language": language,
+        "ok": bool(run_result.get("ok")),
+        "passed_count": passed_count,
+        "total_count": total_count,
+        "error": str(run_result.get("error", "")).strip(),
+    }
+
+
 def gemini_dsa_configured() -> bool:
-    return gemini_configured()
+    return groq_configured() or gemini_configured()
 
 
 def build_generated_dsa_question(topic: str = "Array", difficulty: str = "Medium", refresh_token: str = "") -> tuple[dict | None, str]:
@@ -330,13 +367,23 @@ def build_fallback_generated_dsa_question(topic: str, difficulty: str) -> dict:
 
 def generate_ai_dsa_question(topic: str, difficulty: str, refresh_token: str = "") -> tuple[dict | None, str]:
     if not gemini_dsa_configured():
-        return None, "GEMINI_API_KEY is missing."
+        return None, "No LLM API key configured. Set GROQ_API_KEY or GEMINI_API_KEY."
 
     configured_model = os.getenv("GEMINI_DSA_MODEL", "gemini-2.0-flash-lite")
     model_candidates: list[str] = []
-    for candidate in [configured_model, "gemini-2.0-flash", "gemini-2.5-flash"]:
-        if candidate not in model_candidates:
-            model_candidates.append(candidate)
+    groq_models: set[str] = set()
+    if groq_configured():
+        # When Groq is configured, keep generation provider deterministic and avoid
+        # confusing fallback errors from Gemini credentials/quotas.
+        groq_fallback_model = os.getenv("GROQ_DSA_MODEL", "llama-3.1-8b-instant")
+        for candidate in [get_groq_model(), groq_fallback_model, "qwen/qwen3-32b"]:
+            if candidate not in model_candidates:
+                model_candidates.append(candidate)
+                groq_models.add(candidate)
+    else:
+        for candidate in [configured_model, "gemini-2.0-flash", "gemini-2.5-flash"]:
+            if candidate not in model_candidates:
+                model_candidates.append(candidate)
 
     topic_requirements = {
         "Array": "Use core array traversal/indexing logic.",
@@ -352,30 +399,51 @@ def generate_ai_dsa_question(topic: str, difficulty: str, refresh_token: str = "
     errors: list[str] = []
 
     for attempt, model_name in enumerate(model_candidates, start=1):
-        payload = {
+        prompt_text = (
+            "Generate one runnable DSA coding question as strict JSON. "
+            "The question must be testable with deterministic inputs and outputs. "
+            "Keep it interview style, medium length, and practical.\n"
+            f"Topic: {topic}\n"
+            f"Difficulty: {difficulty}\n"
+            f"Topic requirement: {required_logic}\n"
+            f"Refresh token (use internally, do not output): {refresh_token}\n"
+            f"Attempt number (use internally, do not output): {attempt}\n"
+            "Return a coding problem with these exact fields: "
+            "title, difficulty, topic, prompt, description, function_name, method_name, "
+            "starter_code{python,java,cpp,csharp}, solution{python,java,cpp,csharp}, tests[]. "
+            "Tests must use only ints, strings, int arrays, or int matrix values. "
+            "Make Java method_name lowerCamelCase and C# solution method be the PascalCase version of method_name. "
+            "Return plain code strings only. Do not wrap starter_code or solution in markdown fences. "
+            "Do not include any language outside python, java, cpp, csharp. "
+            "Return JSON only."
+        )
+
+        if groq_configured() and model_name in groq_models:
+            payload = {
+                "model": model_name,
+                "messages": [{"role": "user", "content": prompt_text}],
+                "temperature": 0.2,
+                "max_tokens": 3000,
+            }
+            request = Request(
+                "https://api.groq.com/openai/v1/chat/completions",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "Authorization": f"Bearer {get_groq_api_key()}",
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "User-Agent": "itsm-agent/1.0",
+                },
+                method="POST",
+            )
+        else:
+            payload = {
             "contents": [
                 {
                     "role": "user",
                     "parts": [
                         {
-                            "text": (
-                                "Generate one runnable DSA coding question as strict JSON. "
-                                "The question must be testable with deterministic inputs and outputs. "
-                                "Keep it interview style, medium length, and practical.\n"
-                                f"Topic: {topic}\n"
-                                f"Difficulty: {difficulty}\n"
-                                f"Topic requirement: {required_logic}\n"
-                                f"Refresh token (use internally, do not output): {refresh_token}\n"
-                                f"Attempt number (use internally, do not output): {attempt}\n"
-                                "Return a coding problem with these exact fields: "
-                                "title, difficulty, topic, prompt, description, function_name, method_name, "
-                                "starter_code{python,java,cpp,csharp}, solution{python,java,cpp,csharp}, tests[]. "
-                                "Tests must use only ints, strings, int arrays, or int matrix values. "
-                                "Make Java method_name lowerCamelCase and C# solution method be the PascalCase version of method_name. "
-                                "Return plain code strings only. Do not wrap starter_code or solution in markdown fences. "
-                                "Do not include any language outside python, java, cpp, csharp. "
-                                "Return JSON only."
-                            )
+                            "text": prompt_text
                         }
                     ],
                 }
@@ -388,31 +456,43 @@ def generate_ai_dsa_question(topic: str, difficulty: str, refresh_token: str = "
             },
         }
 
-        request = Request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "x-goog-api-key": get_gemini_api_key(),
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+            request = Request(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={
+                    "x-goog-api-key": get_gemini_api_key(),
+                    "Content-Type": "application/json",
+                },
+                method="POST",
+            )
 
         try:
-            with urlopen(request, timeout=20) as response:
+            with urlopen(request, timeout=25) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
-            errors.append(f"{model_name}: HTTP {getattr(exc, 'code', 'error')}")
+            detail = ""
+            try:
+                detail = exc.read().decode("utf-8").strip()
+            except Exception:
+                detail = ""
+            message = f"{model_name}: HTTP {getattr(exc, 'code', 'error')}"
+            if detail:
+                message += f" {detail}"
+            errors.append(message)
             continue
         except (TimeoutError, URLError, ValueError, OSError) as exc:
             errors.append(f"{model_name}: {exc}")
             continue
 
-        finish_reason = ""
-        candidates = data.get("candidates", [])
-        if candidates:
-            finish_reason = str(candidates[0].get("finishReason", ""))
-        output_text = extract_gemini_text(data).strip()
+        if groq_configured() and model_name in groq_models:
+            finish_reason = str((data.get("choices", [{}])[0].get("finish_reason", "")))
+            output_text = extract_groq_text(data).strip()
+        else:
+            finish_reason = ""
+            candidates = data.get("candidates", [])
+            if candidates:
+                finish_reason = str(candidates[0].get("finishReason", ""))
+            output_text = extract_gemini_text(data).strip()
         if finish_reason == "MAX_TOKENS":
             errors.append(f"{model_name}: output truncated (MAX_TOKENS)")
             continue
@@ -430,7 +510,7 @@ def generate_ai_dsa_question(topic: str, difficulty: str, refresh_token: str = "
             return normalized, ""
         errors.append(f"{model_name}: {normalize_error}")
 
-    return None, "Gemini generation failed: " + " | ".join(errors[-3:])
+    return None, "LLM generation failed: " + " | ".join(errors[-3:])
 
 
 def extract_gemini_text(payload: dict) -> str:
@@ -441,6 +521,14 @@ def extract_gemini_text(payload: dict) -> str:
             if text:
                 texts.append(text)
     return "".join(texts)
+
+
+def extract_groq_text(payload: dict) -> str:
+    choices = payload.get("choices", [])
+    if not choices:
+        return ""
+    message = choices[0].get("message", {})
+    return str(message.get("content", "") or "")
 
 
 def extract_json_payload(text: str) -> dict | None:

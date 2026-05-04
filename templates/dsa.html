@@ -137,7 +137,10 @@
                             <pre id="editor-line-numbers" class="editor-line-numbers" aria-hidden="true">1</pre>
                             <textarea id="code-editor" name="code" spellcheck="false" data-theme-target>{{ editor_code }}</textarea>
                         </div>
-                        <button type="submit">Run Code</button>
+                        <div class="dsa-action-row">
+                            <button type="submit" class="run-btn">Run Code</button>
+                            <button type="submit" formaction="/dsa/{{ active_dsa.id }}/submit" class="submit-btn">Submit Code</button>
+                        </div>
                     </form>
                 </article>
 
@@ -159,6 +162,58 @@
                     {% endif %}
                 </article>
                 {% endif %}
+
+                {% if submission_report %}
+                <article class="workspace-card">
+                    <h3>Submission Analysis Report</h3>
+                    <p>
+                        <strong>Status:</strong> {{ submission_report.status }} |
+                        <strong>Language:</strong> {{ submission_report.language }} |
+                        <strong>Score:</strong> {{ submission_report.score }}%
+                    </p>
+                    <p>
+                        <strong>Passed:</strong> {{ submission_report.passed_count }}/{{ submission_report.total_count }} |
+                        <strong>Code Lines:</strong> {{ submission_report.line_count }}
+                    </p>
+                    {% if submission_report.error %}
+                    <pre class="error-box">{{ submission_report.error }}</pre>
+                    {% endif %}
+                    {% if submission_report.hints %}
+                    <ul class="feature-list">
+                        {% for hint in submission_report.hints %}
+                        <li>{{ hint }}</li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                </article>
+                {% endif %}
+
+                <article class="workspace-card">
+                    <h3>Submission History</h3>
+                    {% if submission_history %}
+                    <ul class="feature-list result-list">
+                        {% for submission in submission_history %}
+                        <li class="{% if submission.ok %}pass{% else %}fail{% endif %}">
+                            {{ submission.language|upper }} |
+                            {% if submission.ok %}
+                            Passed {{ submission.passed_count }}/{{ submission.total_count }}
+                            {% else %}
+                            Failed{% if submission.error %}: {{ submission.error }}{% endif %}
+                            {% endif %}
+                            | {{ submission.submitted_at }}
+                            {% if submission.code %}
+                            <details class="submission-code">
+                                <summary>View Submitted Code</summary>
+                                <pre class="error-box">{{ submission.code }}</pre>
+                            </details>
+                            {% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <p class="muted-note">No submissions yet for this question.</p>
+                    {% endif %}
+                </article>
             </div>
         </div>
     </section>

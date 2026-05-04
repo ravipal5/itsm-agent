@@ -1,4 +1,5 @@
 from collections import Counter
+from datetime import datetime
 from io import BytesIO
 import re
 from xml.etree import ElementTree
@@ -15,7 +16,27 @@ def extract_resume_text(filename: str, content: bytes) -> str:
     if lower_name.endswith(".pdf") and PdfReader:
         try:
             reader = PdfReader(BytesIO(content))
-            return " ".join(page.extract_text() or "" for page in reader.pages)
+            if reader.is_encrypted:
+                try:
+                    reader.decrypt("")
+                except Exception:
+                    return ""
+
+            chunks: list[str] = []
+            for page in reader.pages:
+                text = page.extract_text() or ""
+                if not text.strip():
+                    try:
+                        text = page.extract_text(extraction_mode="layout") or ""
+                    except Exception:
+                        text = ""
+                if text.strip():
+                    chunks.append(text)
+
+            merged = "\n".join(chunks)
+            merged = re.sub(r"\s+\n", "\n", merged)
+            merged = re.sub(r"\n{3,}", "\n\n", merged)
+            return merged.strip()
         except Exception:
             return ""
 
@@ -81,8 +102,8 @@ def infer_resume_profile(resume_text: str, fallback_filename: str = "") -> dict:
 
 
 def estimate_years_of_experience(resume_text: str) -> int:
-    current_year = 2026
-    pattern = re.compile(r"(20\d{2})\s*[-–to]+\s*(present|current|20\d{2})", re.IGNORECASE)
+    current_year = datetime.now().year
+    pattern = re.compile(r"(20\d{2})\s*(?:-|–|—|to)\s*(present|current|20\d{2})", re.IGNORECASE)
     spans = []
 
     for start_text, end_text in pattern.findall(resume_text):
